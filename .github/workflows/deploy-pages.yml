@@ -1,8 +1,12 @@
 name: Deploy to GitHub Pages
 
+# NOTE: GitHub Pages must be enabled once by hand
+# (Settings -> Pages -> Build and deployment -> Source: "GitHub Actions").
+# The CI token cannot create the Pages site itself, so this workflow is
+# manual-only to avoid failing on every push. After enabling Pages, run it
+# from the Actions tab (or it will run on the next push if you re-add the
+# push trigger). It publishes index.html to https://<owner>.github.io/<repo>/
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
