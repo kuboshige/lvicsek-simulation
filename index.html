@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="theme-color" content="#05060a">
+<title>Vicsek Flock — 群れが生まれる</title>
+<style>
+  :root{
+    --ink:#eef1ff;
+    --muted:#9aa3c7;
+    --panel:rgba(14,17,30,.62);
+    --panel-line:rgba(150,170,255,.14);
+    --accent:#5ad1ff;
+    --hot:#ff5a8a;
+    --gold:#ffd15a;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%;overflow:hidden;background:#05060a}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Hiragino Sans","Noto Sans JP",system-ui,sans-serif;
+    color:var(--ink);
+    -webkit-user-select:none;user-select:none;
+    touch-action:none;
+  }
+  #stage{position:fixed;inset:0;display:block}
+
+  /* ---- HUD ---- */
+  .hud{
+    position:fixed;left:16px;top:14px;z-index:10;
+    display:flex;flex-direction:column;gap:10px;
+    pointer-events:none;
+  }
+  .card{
+    background:var(--panel);
+    border:1px solid var(--panel-line);
+    border-radius:14px;
+    padding:12px 14px;
+    backdrop-filter:blur(12px) saturate(1.2);
+    -webkit-backdrop-filter:blur(12px) saturate(1.2);
+    box-shadow:0 10px 40px rgba(0,0,0,.35);
+  }
+  .title{font-size:13px;letter-spacing:.14em;color:var(--muted);text-transform:uppercase;margin:0 0 6px}
+  .readout{display:flex;align-items:baseline;gap:12px}
+  .n-big{font-size:30px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1}
+  .n-label{font-size:12px;color:var(--muted)}
+  .state{margin-top:9px;font-size:15px;font-weight:600;letter-spacing:.02em;transition:color .4s}
+  .state small{font-weight:400;color:var(--muted);font-size:12px;margin-left:6px}
+  .bar{
+    position:relative;height:8px;border-radius:6px;margin-top:9px;
+    background:rgba(255,255,255,.08);overflow:hidden;
+  }
+  .bar > i{
+    position:absolute;left:0;top:0;bottom:0;width:0%;
+    background:linear-gradient(90deg,#3a6bff,#5ad1ff 55%,#ff5a8a);
+    border-radius:6px;transition:width .12s linear;
+  }
+  .bar > .crit{
+    position:absolute;top:-3px;bottom:-3px;width:2px;left:60%;
+    background:rgba(255,209,90,.85);box-shadow:0 0 8px rgba(255,209,90,.7);
+  }
+  .va-line{display:flex;justify-content:space-between;margin-top:6px;font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
+
+  /* ---- controls ---- */
+  .controls{
+    position:fixed;right:16px;top:14px;z-index:10;width:230px;
+    display:flex;flex-direction:column;gap:12px;
+    transform:translateX(calc(100% + 22px));transition:transform .35s cubic-bezier(.22,1,.36,1);
+  }
+  .controls.open{transform:none}
+  .gear{
+    position:fixed;right:16px;top:14px;z-index:11;
+    width:44px;height:44px;border-radius:12px;
+    background:var(--panel);border:1px solid var(--panel-line);
+    display:flex;align-items:center;justify-content:center;cursor:pointer;
+    backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+    color:var(--ink);font-size:20px;transition:transform .35s cubic-bezier(.22,1,.36,1),background .2s;
+  }
+  .gear:hover{background:rgba(30,36,60,.8)}
+  .gear.open{transform:translateX(-244px) rotate(30deg)}
+  .ctl label{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin-bottom:7px}
+  .ctl label b{color:var(--ink);font-weight:600;font-variant-numeric:tabular-nums}
+  input[type=range]{
+    -webkit-appearance:none;appearance:none;width:100%;height:4px;border-radius:4px;
+    background:rgba(255,255,255,.14);outline:none;margin:0;
+  }
+  input[type=range]::-webkit-slider-thumb{
+    -webkit-appearance:none;width:18px;height:18px;border-radius:50%;
+    background:var(--accent);cursor:pointer;box-shadow:0 0 10px rgba(90,209,255,.6);border:2px solid #08101c;
+  }
+  input[type=range]::-moz-range-thumb{
+    width:16px;height:16px;border-radius:50%;background:var(--accent);cursor:pointer;border:2px solid #08101c;
+  }
+  .ctl + .ctl{margin-top:2px}
+  .btnrow{display:flex;gap:8px;flex-wrap:wrap}
+  .btn{
+    flex:1 1 auto;min-width:64px;padding:9px 10px;border-radius:10px;cursor:pointer;
+    background:rgba(90,120,255,.14);border:1px solid var(--panel-line);color:var(--ink);
+    font-size:12.5px;font-weight:600;transition:background .15s,transform .05s;
+  }
+  .btn:hover{background:rgba(90,120,255,.28)}
+  .btn:active{transform:scale(.96)}
+  .btn.warm{background:rgba(255,90,138,.14)}
+  .btn.warm:hover{background:rgba(255,90,138,.3)}
+
+  /* ---- hint & toast ---- */
+  .hint{
+    position:fixed;left:50%;bottom:38px;transform:translateX(-50%);z-index:9;
+    font-size:15px;color:var(--muted);pointer-events:none;text-align:center;
+    animation:breathe 2.6s ease-in-out infinite;
+  }
+  .hint b{color:var(--ink)}
+  @keyframes breathe{0%,100%{opacity:.4}50%{opacity:1}}
+  .hint.gone{animation:none;opacity:0;transition:opacity .6s}
+
+  .toast{
+    position:fixed;left:50%;top:38%;transform:translate(-50%,-50%) scale(.8);z-index:12;
+    text-align:center;pointer-events:none;opacity:0;
+  }
+  .toast .big{font-size:min(11vw,64px);font-weight:800;letter-spacing:.02em;
+    background:linear-gradient(90deg,#5ad1ff,#ffd15a,#ff5a8a);-webkit-background-clip:text;background-clip:text;color:transparent;
+    filter:drop-shadow(0 4px 30px rgba(120,180,255,.4));}
+  .toast .sub{margin-top:8px;font-size:16px;color:var(--muted);letter-spacing:.2em}
+  .toast.show{animation:pop 2.4s cubic-bezier(.16,1,.3,1) forwards}
+  @keyframes pop{
+    0%{opacity:0;transform:translate(-50%,-50%) scale(.7)}
+    12%{opacity:1;transform:translate(-50%,-50%) scale(1.05)}
+    22%{transform:translate(-50%,-50%) scale(1)}
+    80%{opacity:1}
+    100%{opacity:0;transform:translate(-50%,-52%) scale(1)}
+  }
+
+  .credit{position:fixed;right:14px;bottom:12px;z-index:9;font-size:11px;color:rgba(154,163,199,.5);pointer-events:none}
+  @media (max-width:560px){
+    .n-big{font-size:26px}
+    .controls{width:min(230px,72vw)}
+    .hint{font-size:13px;bottom:26px;padding:0 16px}
+  }
+</style>
+</head>
+<body>
+<canvas id="stage"></canvas>
+
+<div class="hud">
+  <div class="card">
+    <p class="title">Vicsek&nbsp;Flock</p>
+    <div class="readout">
+      <span class="n-big" id="nCount">1</span>
+      <span class="n-label">粒子 / particles</span>
+    </div>
+    <div class="state" id="stateLbl" style="color:var(--muted)">観察中… <small>1点を追ってみて</small></div>
+    <div class="bar"><i id="vaFill"></i><div class="crit" title="臨界点 critical"></div></div>
+    <div class="va-line"><span>秩序 v<sub>a</sub></span><span id="vaNum">1.00</span></div>
+  </div>
+</div>
+
+<div class="gear" id="gear" title="設定">⚙</div>
+<div class="controls" id="controls">
+  <div class="card ctl">
+    <label>ノイズ η <b id="etaVal">0.45</b></label>
+    <input type="range" id="eta" min="0" max="1.5" step="0.01" value="0.45">
+  </div>
+  <div class="card ctl">
+    <label>速さ v <b id="spdVal">1.5</b></label>
+    <input type="range" id="spd" min="0.3" max="3.5" step="0.1" value="1.5">
+  </div>
+  <div class="card ctl">
+    <label>視野半径 r <b id="radVal">52</b></label>
+    <input type="range" id="rad" min="20" max="120" step="1" value="52">
+  </div>
+  <div class="card">
+    <div class="btnrow">
+      <button class="btn" id="add100">+100</button>
+      <button class="btn" id="add500">+500</button>
+      <button class="btn warm" id="clear">1点に戻す</button>
+    </div>
+  </div>
+</div>
+
+<div class="hint" id="hint">画面を<b>タップ</b>／<b>ドラッグ</b>すると粒子が増える<br><span style="font-size:12px">tap &amp; drag to breed particles</span></div>
+
+<div class="toast" id="toast">
+  <div class="big" id="toastBig">群れが生まれた</div>
+  <div class="sub" id="toastSub">A FLOCK IS BORN</div>
+</div>
+
+<div class="credit">Vicsek model · self-propelled particles</div>
+
+<script>
+(() => {
+  "use strict";
+  const canvas = document.getElementById('stage');
+  const ctx = canvas.getContext('2d', { alpha:false });
+
+  // ---------- world state ----------
+  const P = {
+    eta: 0.45,     // noise amplitude (radians)
+    v: 1.5,        // speed (px/step)
+    r: 52,         // interaction radius (px)
+    trail: 0.16,   // background fade per frame
+    max: 5000,     // hard cap
+  };
+  let W = 0, H = 0, dpr = 1;
+
+  // particle arrays (typed, grown as needed)
+  let cap = 1024;
+  let x  = new Float32Array(cap);
+  let y  = new Float32Array(cap);
+  let th = new Float32Array(cap);
+  let thn = new Float32Array(cap);
+  let N = 0;
+
+  function grow(min){
+    if (cap >= min) return;
+    while (cap < min) cap *= 2;
+    const nx=new Float32Array(cap), ny=new Float32Array(cap), nt=new Float32Array(cap), nn=new Float32Array(cap);
+    nx.set(x); ny.set(y); nt.set(th); nn.set(thn);
+    x=nx; y=ny; th=nt; thn=nn;
+  }
+
+  function addParticle(px, py, angle){
+    if (N >= P.max) return;
+    grow(N+1);
+    x[N]=px; y[N]=py; th[N]= angle===undefined ? Math.random()*Math.PI*2 : angle;
+    N++;
+  }
+  function addBurst(px, py, count, spread){
+    for (let k=0;k<count;k++){
+      const a = Math.random()*Math.PI*2, rr = Math.random()*spread;
+      addParticle(
+        (px + Math.cos(a)*rr + W) % W,
+        (py + Math.sin(a)*rr + H) % H
+      );
+    }
+  }
+  function resetToOne(){
+    N = 0;
+    addParticle(W*0.5, H*0.5);
+    ordered = false;
+    ctx.fillStyle = '#05060a';
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+  }
+
+  // ---------- sizing ----------
+  function resize(){
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const oldW = W, oldH = H;
+    W = window.innerWidth; H = window.innerHeight;
+    canvas.width = Math.floor(W*dpr);
+    canvas.height = Math.floor(H*dpr);
+    canvas.style.width = W+'px';
+    canvas.style.height = H+'px';
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+    if (oldW>0 && N>0){
+      const sx=W/oldW, sy=H/oldH;
+      for (let i=0;i<N;i++){ x[i]*=sx; y[i]*=sy; }
+    }
+    ctx.fillStyle = '#05060a';
+    ctx.fillRect(0,0,W,H);
+  }
+
+  // ---------- spatial grid (linked-list buckets) ----------
+  let head=null, next=null, cols=0, rows=0, cw=0, ch=0;
+  function buildGrid(){
+    const cs = P.r;
+    cols = Math.max(1, Math.floor(W/cs));
+    rows = Math.max(1, Math.floor(H/cs));
+    cw = W/cols; ch = H/rows;
+    const nc = cols*rows;
+    if (!head || head.length !== nc) head = new Int32Array(nc);
+    head.fill(-1);
+    if (!next || next.length < N) next = new Int32Array(Math.max(N, cap));
+    for (let i=0;i<N;i++){
+      let cx=(x[i]/cw)|0; if(cx>=cols)cx=cols-1; if(cx<0)cx=0;
+      let cy=(y[i]/ch)|0; if(cy>=rows)cy=rows-1; if(cy<0)cy=0;
+      const c=cy*cols+cx; next[i]=head[c]; head[c]=i;
+    }
+  }
+
+  // ---------- physics step ----------
+  let vaCur = 1;
+  function step(){
+    if (N===0) return;
+    buildGrid();
+    const r2 = P.r*P.r, halfW=W/2, halfH=H/2, eta=P.eta;
+    for (let i=0;i<N;i++){
+      const xi=x[i], yi=y[i];
+      let ss=Math.sin(th[i]), sc=Math.cos(th[i]);
+      let cx=(xi/cw)|0, cy=(yi/ch)|0;
+      for (let dy=-1;dy<=1;dy++){
+        let ny=cy+dy; if(ny<0)ny+=rows; else if(ny>=rows)ny-=rows;
+        for (let dx=-1;dx<=1;dx++){
+          let nx=cx+dx; if(nx<0)nx+=cols; else if(nx>=cols)nx-=cols;
+          for (let j=head[ny*cols+nx]; j!==-1; j=next[j]){
+            if (j===i) continue;
+            let ddx=xi-x[j], ddy=yi-y[j];
+            if (ddx>halfW)ddx-=W; else if(ddx<-halfW)ddx+=W;
+            if (ddy>halfH)ddy-=H; else if(ddy<-halfH)ddy+=H;
+            if (ddx*ddx+ddy*ddy < r2){ ss+=Math.sin(th[j]); sc+=Math.cos(th[j]); }
+          }
+        }
+      }
+      thn[i] = Math.atan2(ss,sc) + (Math.random()-0.5)*eta;
+    }
+    // synchronous update + move + order parameter
+    let gx=0, gy=0;
+    const v=P.v;
+    for (let i=0;i<N;i++){
+      const a=thn[i]; th[i]=a;
+      const c=Math.cos(a), s=Math.sin(a);
+      let nx=x[i]+c*v, ny=y[i]+s*v;
+      if(nx<0)nx+=W; else if(nx>=W)nx-=W;
+      if(ny<0)ny+=H; else if(ny>=H)ny-=H;
+      x[i]=nx; y[i]=ny;
+      gx+=c; gy+=s;
+    }
+    vaCur = Math.hypot(gx,gy)/N;
+  }
+
+  // ---------- render ----------
+  const TAU = Math.PI*2;
+  function render(){
+    // fade previous frame → motion trails
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.fillStyle = 'rgba(5,6,10,'+P.trail+')';
+    ctx.fillRect(0,0,W,H);
+
+    ctx.globalCompositeOperation = 'lighter';
+    const tail = Math.min(9, 3 + P.v*2.2);
+    const glow = N < 700;               // extra glow pass only when cheap
+    for (let i=0;i<N;i++){
+      const a=th[i];
+      const c=Math.cos(a), s=Math.sin(a);
+      const hue = ((a % TAU)+TAU)%TAU / TAU * 360;
+      const px=x[i], py=y[i];
+      // comet tail
+      ctx.strokeStyle = 'hsla('+hue+',90%,60%,0.45)';
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.moveTo(px - c*tail, py - s*tail);
+      ctx.lineTo(px, py);
+      ctx.stroke();
+      // head
+      if (glow){
+        ctx.fillStyle='hsla('+hue+',95%,60%,0.28)';
+        ctx.beginPath(); ctx.arc(px,py,4.2,0,TAU); ctx.fill();
+      }
+      ctx.fillStyle='hsla('+hue+',100%,72%,0.95)';
+      ctx.beginPath(); ctx.arc(px,py,1.7,0,TAU); ctx.fill();
+    }
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
+  // ---------- HUD ----------
+  const nCount=document.getElementById('nCount');
+  const vaFill=document.getElementById('vaFill');
+  const vaNum=document.getElementById('vaNum');
+  const stateLbl=document.getElementById('stateLbl');
+  let ordered=false, uiTick=0;
+
+  function updateHUD(){
+    nCount.textContent = N + (N>=P.max ? ' (MAX)' : '');
+    // v_a is only physically meaningful with enough particles
+    const meaningful = N>=25;
+    const shown = meaningful ? vaCur : Math.min(vaCur, 0.15+Math.random()*0.04);
+    vaFill.style.width = (shown*100).toFixed(0)+'%';
+    vaNum.textContent = (meaningful?vaCur:shown).toFixed(2);
+
+    if (!meaningful){
+      stateLbl.style.color='var(--muted)';
+      stateLbl.innerHTML = N<=1
+        ? '観察中… <small>1点を追ってみて</small>'
+        : 'ばらばら <small>まだ少ない</small>';
+    } else if (vaCur < 0.35){
+      stateLbl.style.color='#7f8cc0';
+      stateLbl.innerHTML='無秩序 <small>DISORDERED — ランダムに散らばる</small>';
+    } else if (vaCur < 0.6){
+      stateLbl.style.color='var(--gold)';
+      stateLbl.innerHTML='臨界 <small>CRITICAL — そろい始めた…</small>';
+    } else {
+      stateLbl.style.color='var(--hot)';
+      stateLbl.innerHTML='群れ <small>FLOCKING — 一つの生き物のように</small>';
+    }
+
+    // celebrate first crossing into order
+    if (meaningful && vaCur>0.62 && !ordered){ ordered=true; celebrate(); }
+    if (meaningful && vaCur<0.45) ordered=false;
+  }
+
+  const toast=document.getElementById('toast');
+  function celebrate(){
+    toast.classList.remove('show'); void toast.offsetWidth; toast.classList.add('show');
+    // soft flash
+    ctx.globalCompositeOperation='lighter';
+    ctx.fillStyle='rgba(120,160,255,0.10)';
+    ctx.fillRect(0,0,W,H);
+    ctx.globalCompositeOperation='source-over';
+  }
+
+  // ---------- loop ----------
+  let spawning=false, spX=0, spY=0;
+  function frame(){
+    if (spawning) addBurst(spX, spY, 6, 14);
+    step();
+    render();
+    if ((uiTick++ & 3)===0) updateHUD();
+    requestAnimationFrame(frame);
+  }
+
+  // ---------- interaction ----------
+  const hint=document.getElementById('hint');
+  let interacted=false;
+  function dismissHint(){ if(!interacted){interacted=true; hint.classList.add('gone');} }
+
+  function pointerPos(e){
+    const t = e.touches ? e.touches[0] : e;
+    return [t.clientX, t.clientY];
+  }
+  function down(e){
+    if (e.target.closest('.controls,.gear')) return;
+    e.preventDefault();
+    dismissHint();
+    const [px,py]=pointerPos(e);
+    spX=px; spY=py; spawning=true;
+    addBurst(px,py,14,16);
+  }
+  function move(e){
+    if(!spawning) return;
+    const [px,py]=pointerPos(e);
+    spX=px; spY=py;
+  }
+  function up(){ spawning=false; }
+
+  canvas.addEventListener('mousedown', down);
+  window.addEventListener('mousemove', move);
+  window.addEventListener('mouseup', up);
+  canvas.addEventListener('touchstart', down, {passive:false});
+  window.addEventListener('touchmove', move, {passive:false});
+  window.addEventListener('touchend', up);
+
+  // ---------- controls ----------
+  const gear=document.getElementById('gear'), controls=document.getElementById('controls');
+  gear.addEventListener('click', ()=>{ gear.classList.toggle('open'); controls.classList.toggle('open'); });
+
+  function bindSlider(id, valId, key, fmt){
+    const el=document.getElementById(id), out=document.getElementById(valId);
+    el.addEventListener('input', ()=>{ P[key]=parseFloat(el.value); out.textContent=fmt(P[key]); });
+  }
+  bindSlider('eta','etaVal','eta',v=>v.toFixed(2));
+  bindSlider('spd','spdVal','v',v=>v.toFixed(1));
+  bindSlider('rad','radVal','r',v=>v.toFixed(0));
+
+  document.getElementById('add100').addEventListener('click', ()=>{ dismissHint(); addBurst(W/2,H/2,100,Math.min(W,H)*0.4); });
+  document.getElementById('add500').addEventListener('click', ()=>{ dismissHint(); addBurst(W/2,H/2,500,Math.min(W,H)*0.45); });
+  document.getElementById('clear').addEventListener('click', ()=>{ resetToOne(); });
+
+  window.addEventListener('keydown', e=>{
+    if (e.key===' '){ e.preventDefault(); dismissHint(); addBurst(W/2,H/2,50,Math.min(W,H)*0.3); }
+    else if (e.key==='r'||e.key==='R'){ resetToOne(); }
+    else if (e.key==='c'||e.key==='C'){ resetToOne(); }
+  });
+
+  window.addEventListener('resize', resize);
+
+  // ---------- boot ----------
+  resize();
+  resetToOne();
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
