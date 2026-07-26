@@ -156,7 +156,6 @@
 
 <div class="hint" id="hint">画面を<b>タップ</b>／<b>ドラッグ</b>すると粒子が増える<br><span style="font-size:12px">tap &amp; drag to breed particles</span></div>
 
-<div class="toast" id="toast"><div class="big">群れが生まれた</div><div class="sub">A FLOCK IS BORN</div></div>
 <div class="credit">Vicsek model · self-propelled particles</div>
 
 <script>
@@ -181,9 +180,9 @@
     const a=new Float32Array(cap),b=new Float32Array(cap),c=new Float32Array(cap),d=new Float32Array(cap);
     a.set(x);b.set(y);c.set(th);d.set(thn); x=a;y=b;th=c;thn=d; }
   function addParticle(px,py,ang){ if(N>=P.max)return; grow(N+1); x[N]=px;y[N]=py; th[N]=ang===undefined?Math.random()*Math.PI*2:ang; N++; }
-  function addBurst(px,py,count,spread){ for(let k=0;k<count;k++){const a=Math.random()*Math.PI*2,rr=Math.random()*spread; addParticle((px+Math.cos(a)*rr+W)%W,(py+Math.sin(a)*rr+H)%H);} }
-  function scatter(count){ for(let k=0;k<count;k++) addParticle(Math.random()*W,Math.random()*H); }
-  function resetToOne(){ N=0; addParticle(W*0.5,H*0.5); ordered=false; sparkArr.length=0; clearBG(); }
+  function addBurst(px,py,count,spread){ for(let k=0;k<count;k++){const a=Math.random()*Math.PI*2,rr=Math.random()*spread; addParticle(Math.min(W-1,Math.max(1,px+Math.cos(a)*rr)),Math.min(H-1,Math.max(1,py+Math.sin(a)*rr)));} }
+  function scatter(count){ for(let k=0;k<count;k++) addParticle(1+Math.random()*(W-2),1+Math.random()*(H-2)); }
+  function resetToOne(){ N=0; addParticle(W*0.5,H*0.5); sparkArr.length=0; clearBG(); }
   function clearBG(){ ctx.fillStyle='#05060a'; ctx.fillRect(0,0,W,H); }
 
   function resize(){
@@ -211,24 +210,27 @@
   function step(){
     if(N===0)return;
     buildGrid();
-    const r2=P.r*P.r,halfW=W/2,halfH=H/2,eta=P.eta;
+    const r2=P.r*P.r,eta=P.eta;
     for(let i=0;i<N;i++){
       const xi=x[i],yi=y[i]; let ss=Math.sin(th[i]),sc=Math.cos(th[i]);
       let cx=(xi/cw)|0,cy=(yi/ch)|0;
-      for(let dy=-1;dy<=1;dy++){let ny=cy+dy;if(ny<0)ny+=rows;else if(ny>=rows)ny-=rows;
-        for(let dx=-1;dx<=1;dx++){let nx=cx+dx;if(nx<0)nx+=cols;else if(nx>=cols)nx-=cols;
+      for(let dy=-1;dy<=1;dy++){const ny=cy+dy;if(ny<0||ny>=rows)continue;
+        for(let dx=-1;dx<=1;dx++){const nx=cx+dx;if(nx<0||nx>=cols)continue;
           for(let j=head[ny*cols+nx];j!==-1;j=next[j]){ if(j===i)continue;
-            let ddx=xi-x[j],ddy=yi-y[j];
-            if(ddx>halfW)ddx-=W;else if(ddx<-halfW)ddx+=W;
-            if(ddy>halfH)ddy-=H;else if(ddy<-halfH)ddy+=H;
+            const ddx=xi-x[j],ddy=yi-y[j];
             if(ddx*ddx+ddy*ddy<r2){ss+=Math.sin(th[j]);sc+=Math.cos(th[j]);}
           }}}
       thn[i]=Math.atan2(ss,sc)+(Math.random()-0.5)*eta;
     }
-    let gx=0,gy=0;const v=P.v;
-    for(let i=0;i<N;i++){const a=thn[i];th[i]=a;const c=Math.cos(a),s=Math.sin(a);
-      let nx=x[i]+c*v,ny=y[i]+s*v; if(nx<0)nx+=W;else if(nx>=W)nx-=W; if(ny<0)ny+=H;else if(ny>=H)ny-=H;
-      x[i]=nx;y[i]=ny; gx+=c;gy+=s;}
+    // integrate with REFLECTING walls (screen edges bounce; nothing leaves the view)
+    let gx=0,gy=0;const v=P.v, xmax=W-1, ymax=H-1;
+    for(let i=0;i<N;i++){
+      const a=thn[i]; let c=Math.cos(a),s=Math.sin(a);
+      let nx=x[i]+c*v, ny=y[i]+s*v;
+      if(nx<1){nx=2-nx;c=-c;} else if(nx>xmax){nx=2*xmax-nx;c=-c;}
+      if(ny<1){ny=2-ny;s=-s;} else if(ny>ymax){ny=2*ymax-ny;s=-s;}
+      th[i]=Math.atan2(s,c); x[i]=nx; y[i]=ny; gx+=c; gy+=s;
+    }
     vaCur=Math.hypot(gx,gy)/N;
   }
 
@@ -241,17 +243,13 @@
 
     // neighbour links (teaching view; only for small N so it stays honest & cheap)
     if(P.links && N<=MAX_LINKS && N>1){
-      const r2=P.r*P.r,halfW=W/2,halfH=H/2;
+      const r2=P.r*P.r;
       ctx.globalCompositeOperation='source-over';
       ctx.strokeStyle='rgba(120,150,255,0.16)'; ctx.lineWidth=1;
       ctx.beginPath();
       for(let i=0;i<N;i++)for(let j=i+1;j<N;j++){
-        let ddx=x[i]-x[j],ddy=y[i]-y[j];
-        if(ddx>halfW)ddx-=W;else if(ddx<-halfW)ddx+=W;
-        if(ddy>halfH)ddy-=H;else if(ddy<-halfH)ddy+=H;
-        if(ddx*ddx+ddy*ddy<r2 && Math.abs(x[i]-x[j])<halfW && Math.abs(y[i]-y[j])<halfH){
-          ctx.moveTo(x[i],y[i]); ctx.lineTo(x[j],y[j]);
-        }
+        const ddx=x[i]-x[j],ddy=y[i]-y[j];
+        if(ddx*ddx+ddy*ddy<r2){ ctx.moveTo(x[i],y[i]); ctx.lineTo(x[j],y[j]); }
       }
       ctx.stroke();
     }
@@ -277,7 +275,7 @@
         vaNum=document.getElementById('vaNum'),stateLbl=document.getElementById('stateLbl');
   const spark=document.getElementById('spark'),sctx=spark.getContext('2d');
   const sparkArr=[]; const SPARK_MAX=120;
-  let ordered=false,uiTick=0;
+  let uiTick=0;
 
   function drawSpark(){
     const w=spark.width,h=spark.height; sctx.clearRect(0,0,w,h);
@@ -302,18 +300,10 @@
     else if(vaCur<0.35){ stateLbl.style.color='#7f8cc0'; stateLbl.innerHTML='無秩序 <small>DISORDERED — ランダムに散らばる</small>'; }
     else if(vaCur<0.6){ stateLbl.style.color='var(--gold)'; stateLbl.innerHTML='臨界 <small>CRITICAL — そろい始めた…</small>'; }
     else{ stateLbl.style.color='var(--hot)'; stateLbl.innerHTML='群れ <small>FLOCKING — 一つの生き物のように</small>'; }
-
-    if(meaningful&&vaCur>0.62&&!ordered){ordered=true;celebrate();}
-    if(meaningful&&vaCur<0.45)ordered=false;
   }
-  const toast=document.getElementById('toast');
-  function celebrate(){ toast.classList.remove('show'); void toast.offsetWidth; toast.classList.add('show');
-    ctx.globalCompositeOperation='lighter'; ctx.fillStyle='rgba(120,160,255,0.10)'; ctx.fillRect(0,0,W,H); ctx.globalCompositeOperation='source-over'; }
 
   // ---- loop ----
-  let spawning=false,spX=0,spY=0;
   function frame(){
-    if(spawning)addBurst(spX,spY,5,48);
     if(!P.paused)step();
     render();
     if((uiTick++&3)===0)updateHUD();
@@ -324,10 +314,23 @@
   const hint=document.getElementById('hint'); let interacted=false;
   function dismissHint(){ if(!interacted){interacted=true;hint.classList.add('gone');} }
   function pointerPos(e){const t=e.touches?e.touches[0]:e;return[t.clientX,t.clientY];}
+  function spawnAt(px,py,n,spread){ for(let k=0;k<n;k++){ const a=Math.random()*Math.PI*2, rr=n===1?0:Math.random()*spread;
+    addParticle(Math.min(W-1,Math.max(1,px+Math.cos(a)*rr)),Math.min(H-1,Math.max(1,py+Math.sin(a)*rr))); } }
+
+  // 1 tap = 1 point. Rapid repeats build a combo so each tap makes 2,3,4,5… more.
+  let combo=0,lastTap=0,dragging=false,dragAcc=0,lastX=0,lastY=0;
+  const COMBO_WIN=350,COMBO_MAX=24,DRAG_STEP=16;
   function down(e){ if(e.target.closest('.controls,.gear'))return; e.preventDefault(); dismissHint();
-    const[px,py]=pointerPos(e); spX=px;spY=py;spawning=true; addBurst(px,py,12,55); }
-  function move(e){ if(!spawning)return; const[px,py]=pointerPos(e); spX=px;spY=py; }
-  function up(){spawning=false;}
+    const[px,py]=pointerPos(e), now=performance.now();
+    combo = (now-lastTap < COMBO_WIN) ? Math.min(COMBO_MAX,combo+1) : 0;
+    lastTap=now;
+    spawnAt(px,py, 1+combo, 8+combo*2);
+    dragging=true; dragAcc=0; lastX=px; lastY=py;
+  }
+  function move(e){ if(!dragging)return; const[px,py]=pointerPos(e);
+    dragAcc+=Math.hypot(px-lastX,py-lastY); lastX=px; lastY=py;
+    while(dragAcc>=DRAG_STEP){ dragAcc-=DRAG_STEP; spawnAt(px,py,1,4); } }   // drag paints single points
+  function up(){ dragging=false; }
   canvas.addEventListener('mousedown',down); window.addEventListener('mousemove',move); window.addEventListener('mouseup',up);
   canvas.addEventListener('touchstart',down,{passive:false}); window.addEventListener('touchmove',move,{passive:false}); window.addEventListener('touchend',up);
 
