@@ -115,9 +115,9 @@
       <canvas id="spark" width="120" height="26"></canvas>
     </div>
     <div class="rulenote">
-      各点が見るのは<b>近くの仲間だけ</b>。命令はたった3つ：<br>
-      <em>①そろえる</em>・<em>②寄る</em>・<em>③離れる</em>。<br>
-      これだけで、群れが<em>ひとりでに</em>渦を巻き、分かれ、また集まる。
+      各鳥が見るのは<b>いちばん近い数羽（k）だけ</b>＝遠くは見ない。<br>
+      命令は3つ：<em>①そろえる</em>・<em>②寄る</em>・<em>③離れる</em>。<br>
+      急旋回もしない。<b>省エネ</b>なのに群れは<em>ひとりでに</em>まとまる。
     </div>
   </div>
 </div>
@@ -126,17 +126,18 @@
 <div class="controls" id="controls">
   <div class="grp-h">3つのルール（近くの仲間だけ見る）</div>
   <div class="card ctl-wrap">
-    <div class="ctl"><label>① 整列 <small style="color:var(--muted)">向きをそろえる</small> <b id="waVal">1.0</b></label><input type="range" id="wa" min="0" max="2.5" step="0.05" value="1.0"></div>
+    <div class="ctl"><label>① 整列 <small style="color:var(--muted)">向きをそろえる</small> <b id="waVal">1.5</b></label><input type="range" id="wa" min="0" max="2.5" step="0.05" value="1.5"></div>
     <div class="ctl"><label>② 結合 <small style="color:var(--muted)">寄り集まる</small> <b id="wcVal">0.85</b></label><input type="range" id="wc" min="0" max="2.5" step="0.05" value="0.85"></div>
-    <div class="ctl"><label>③ 分離 <small style="color:var(--muted)">近すぎたら離れる</small> <b id="wsVal">1.4</b></label><input type="range" id="ws" min="0" max="3" step="0.05" value="1.4"></div>
-    <div class="ctl"><label>ノイズ <small style="color:var(--muted)">ゆらぎ</small> <b id="nzVal">0.18</b></label><input type="range" id="nz" min="0" max="1.2" step="0.01" value="0.18"></div>
+    <div class="ctl"><label>③ 分離 <small style="color:var(--muted)">近すぎたら離れる</small> <b id="wsVal">1.0</b></label><input type="range" id="ws" min="0" max="3" step="0.05" value="1.0"></div>
+    <div class="ctl"><label>ノイズ <small style="color:var(--muted)">ゆらぎ</small> <b id="nzVal">0.05</b></label><input type="range" id="nz" min="0" max="1.0" step="0.01" value="0.05"></div>
   </div>
 
-  <div class="grp-h">動き</div>
+  <div class="grp-h">動き（鳥の省エネ）</div>
   <div class="card ctl-wrap">
-    <div class="ctl"><label>速さ v <b id="spdVal">1.7</b></label><input type="range" id="spd" min="0.3" max="4" step="0.1" value="1.7"></div>
-    <div class="ctl"><label>視野半径 r <b id="radVal">60</b></label><input type="range" id="rad" min="24" max="150" step="1" value="60"></div>
-    <div class="ctl"><label>曲がりやすさ <b id="tnVal">0.28</b></label><input type="range" id="tn" min="0.05" max="0.9" step="0.01" value="0.28"></div>
+    <div class="ctl"><label>近傍数 k <small style="color:var(--muted)">何羽まで見るか</small> <b id="knnVal">7</b></label><input type="range" id="knn" min="2" max="16" step="1" value="7"></div>
+    <div class="ctl"><label>視野の上限 r <small style="color:var(--muted)">k の探索範囲</small> <b id="radVal">52</b></label><input type="range" id="rad" min="24" max="140" step="1" value="52"></div>
+    <div class="ctl"><label>曲がりやすさ <small style="color:var(--muted)">小=省エネ</small> <b id="tnVal">0.12</b></label><input type="range" id="tn" min="0.03" max="0.6" step="0.01" value="0.12"></div>
+    <div class="ctl"><label>速さ v <b id="spdVal">1.4</b></label><input type="range" id="spd" min="0.3" max="4" step="0.1" value="1.4"></div>
     <div class="ctl"><label>残像の強さ <b id="trlVal">0.16</b></label><input type="range" id="trl" min="0.02" max="0.9" step="0.01" value="0.16"></div>
   </div>
 
@@ -175,14 +176,18 @@
   const ctx = canvas.getContext('2d', { alpha:false });
 
   // ---- tunable state ----
+  // Defaults tuned for "energy-efficient bird": topological perception (each
+  // bird tracks only its k≈7 nearest, like real starlings) + gentle turning +
+  // low jitter, so individuals spend little effort while the flock stays coherent.
   const P = {
-    r:60, rSep:18, v:1.7, turn:0.28, noise:0.18, // perception & motion
-    wA:1.0, wC:0.85, wS:1.4,                      // 3 boids weights: align / cohere / separate
-    margin:0.14, wall:1.6,                        // soft walls
+    k:7, r:52, rSep:14, v:1.4, turn:0.12, noise:0.05, // topological k, cap radius, motion
+    wA:1.5, wC:0.85, wS:1.0,                           // align / cohere / separate
+    margin:0.18, wall:2.4,                             // soft walls
     trail:0.16,
     paused:false, trails:true, glow:true, tails:true, colorDir:true, links:false,
     max:5000,
   };
+  const MAXK=20, kd=new Float64Array(MAXK), ki=new Int32Array(MAXK); // k-NN scratch
   let W=0,H=0,dpr=1;
 
   // particle SoA
@@ -225,25 +230,30 @@
     buildGrid();
     // Three LOCAL rules (Boids): ① align headings ② cohere toward local centre
     // ③ separate from too-close neighbours. Plus a little noise. Emergence, not scripting.
-    const r2=P.r*P.r, rSep2=P.rSep*P.rSep, noise=P.noise, wA=P.wA, wC=P.wC, wS=P.wS;
+    const capR2=P.r*P.r, rSep2=P.rSep*P.rSep, noise=P.noise, wA=P.wA, wC=P.wC, wS=P.wS;
     const turn=P.turn, m=P.margin*Math.min(W,H), wall=P.wall;
+    const kk = P.k<1?1 : (P.k>MAXK?MAXK : P.k|0);   // topological: how many neighbours each bird tracks
     for(let i=0;i<N;i++){
       const xi=x[i],yi=y[i];
-      let ax=Math.cos(th[i]),ay=Math.sin(th[i]); // alignment (include self)
-      let coX=0,coY=0, seX=0,seY=0, cnt=0;
+      // pick the kk NEAREST neighbours (capped at radius r) — "don't look far"
+      let kn=0, worst=0, worstd=-1;
       const gx0=(xi/cw)|0, gy0=(yi/ch)|0;
       for(let dy=-1;dy<=1;dy++){const ny=gy0+dy;if(ny<0||ny>=rows)continue;
         for(let dx=-1;dx<=1;dx++){const nx=gx0+dx;if(nx<0||nx>=cols)continue;
           for(let j=head[ny*cols+nx];j!==-1;j=next[j]){ if(j===i)continue;
-            const ddx=x[j]-xi, ddy=y[j]-yi, d2=ddx*ddx+ddy*ddy;
-            if(d2<r2){
-              ax+=Math.cos(th[j]); ay+=Math.sin(th[j]);
-              coX+=ddx; coY+=ddy; cnt++;
-              if(d2<rSep2 && d2>1e-6){ const d=Math.sqrt(d2), w=1-d/P.rSep; seX-=ddx/d*w; seY-=ddy/d*w; }
-            }
+            const ddx=x[j]-xi, ddy=y[j]-yi, d2=ddx*ddx+ddy*ddy; if(d2>=capR2)continue;
+            if(kn<kk){ kd[kn]=d2; ki[kn]=j; kn++;
+              if(kn===kk){ worstd=kd[0];worst=0; for(let t=1;t<kk;t++)if(kd[t]>worstd){worstd=kd[t];worst=t;} } }
+            else if(d2<worstd){ kd[worst]=d2; ki[worst]=j;
+              worstd=kd[0];worst=0; for(let t=1;t<kk;t++)if(kd[t]>worstd){worstd=kd[t];worst=t;} }
           }}}
+      // three local rules over just those k neighbours
+      let ax=Math.cos(th[i]),ay=Math.sin(th[i]), coX=0,coY=0, seX=0,seY=0;
+      for(let t=0;t<kn;t++){ const j=ki[t], ddx=x[j]-xi, ddy=y[j]-yi, d2=kd[t];
+        ax+=Math.cos(th[j]); ay+=Math.sin(th[j]); coX+=ddx; coY+=ddy;
+        if(d2<rSep2 && d2>1e-6){ const d=Math.sqrt(d2), w=1-d/P.rSep; seX-=ddx/d*w; seY-=ddy/d*w; } }
       let Dx=0,Dy=0,l;
-      if(cnt>0){
+      if(kn>0){
         l=Math.hypot(ax,ay); if(l>0){Dx+=wA*ax/l; Dy+=wA*ay/l;}
         l=Math.hypot(coX,coY); if(l>0){Dx+=wC*coX/l; Dy+=wC*coY/l;}
         l=Math.hypot(seX,seY); if(l>0){Dx+=wS*seX/l; Dy+=wS*seY/l;}
@@ -378,9 +388,10 @@
   bindSlider('wc','wcVal','wC',v=>v.toFixed(2));
   bindSlider('ws','wsVal','wS',v=>v.toFixed(2));
   bindSlider('nz','nzVal','noise',v=>v.toFixed(2));
-  bindSlider('spd','spdVal','v',v=>v.toFixed(1));
+  bindSlider('knn','knnVal','k',v=>v.toFixed(0));
   bindSlider('rad','radVal','r',v=>v.toFixed(0));
   bindSlider('tn','tnVal','turn',v=>v.toFixed(2));
+  bindSlider('spd','spdVal','v',v=>v.toFixed(1));
   bindSlider('trl','trlVal','trail',v=>v.toFixed(2));
 
   // ---- controls: toggles ----
