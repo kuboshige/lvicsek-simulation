@@ -143,6 +143,7 @@
 
   <div class="grp-h">表示 / ふるまい</div>
   <div class="card">
+    <div class="tgl" data-key="mode3d"><span>空間モード（3D）<small>平面 ⇄ 立体（自動回転）</small></span><div class="switch"></div></div>
     <div class="tgl" data-key="hud"><span>情報パネル<small>左上のステータス（既定：非表示）</small></span><div class="switch"></div></div>
     <div class="tgl on" data-key="paused" data-inv="1"><span>再生<small>▶ 動かす / ⏸ 止める</small></span><div class="switch"></div></div>
     <div class="tgl on" data-key="trails"><span>残像トレイル<small>ひゅんひゅんの尾</small></span><div class="switch"></div></div>
@@ -184,20 +185,28 @@
     wA:1.5, wC:0.85, wS:1.0,                           // align / cohere / separate
     margin:0.18, wall:2.4,                             // soft walls
     trail:0.16,
+    mode3d:false,   // false = planar (default), true = space (3D)
     paused:false, trails:true, glow:true, tails:true, colorDir:true, links:false,
     max:5000,
   };
   const MAXK=20, kd=new Float64Array(MAXK), ki=new Int32Array(MAXK); // k-NN scratch
-  let W=0,H=0,dpr=1;
+  let W=0,H=0,dpr=1,DEP=600;   // DEP = depth of the 3D box (space mode)
 
-  // particle SoA
+  // particle SoA (2D heading = th; 3D heading = unit vector vx,vy,vz)
   let cap=1024;
-  let x=new Float32Array(cap), y=new Float32Array(cap), th=new Float32Array(cap), thn=new Float32Array(cap);
+  let x=new Float32Array(cap), y=new Float32Array(cap), z=new Float32Array(cap);
+  let th=new Float32Array(cap), thn=new Float32Array(cap);
+  let vx=new Float32Array(cap), vy=new Float32Array(cap), vz=new Float32Array(cap);
+  let vxn=new Float32Array(cap), vyn=new Float32Array(cap), vzn=new Float32Array(cap);
   let N=0;
   function grow(min){ if(cap>=min)return; while(cap<min)cap*=2;
-    const a=new Float32Array(cap),b=new Float32Array(cap),c=new Float32Array(cap),d=new Float32Array(cap);
-    a.set(x);b.set(y);c.set(th);d.set(thn); x=a;y=b;th=c;thn=d; }
-  function addParticle(px,py,ang){ if(N>=P.max)return; grow(N+1); x[N]=px;y[N]=py; th[N]=ang===undefined?Math.random()*Math.PI*2:ang; N++; }
+    const g=a=>{const b=new Float32Array(cap);b.set(a);return b;};
+    x=g(x);y=g(y);z=g(z);th=g(th);thn=g(thn);vx=g(vx);vy=g(vy);vz=g(vz);vxn=g(vxn);vyn=g(vyn);vzn=g(vzn); }
+  function addParticle(px,py,ang){ if(N>=P.max)return; grow(N+1);
+    const a=ang===undefined?Math.random()*Math.PI*2:ang;
+    x[N]=px; y[N]=py; z[N]=Math.random()*DEP; th[N]=a;
+    let hx=Math.cos(a),hy=Math.sin(a),hz=(Math.random()-0.5)*0.6,l=Math.hypot(hx,hy,hz);
+    vx[N]=hx/l; vy[N]=hy/l; vz[N]=hz/l; N++; }
   function addBurst(px,py,count,spread){ for(let k=0;k<count;k++){const a=Math.random()*Math.PI*2,rr=Math.random()*spread; addParticle(Math.min(W-1,Math.max(1,px+Math.cos(a)*rr)),Math.min(H-1,Math.max(1,py+Math.sin(a)*rr)));} }
   function scatter(count){ for(let k=0;k<count;k++) addParticle(1+Math.random()*(W-2),1+Math.random()*(H-2)); }
   function resetToOne(){ N=0; addParticle(W*0.5,H*0.5); sparkArr.length=0; clearBG(); }
@@ -205,11 +214,11 @@
 
   function resize(){
     dpr=Math.min(window.devicePixelRatio||1,2);
-    const ow=W,oh=H; W=window.innerWidth;H=window.innerHeight;
+    const ow=W,oh=H,oDEP=DEP; W=window.innerWidth;H=window.innerHeight; DEP=Math.min(W,H);
     canvas.width=Math.floor(W*dpr);canvas.height=Math.floor(H*dpr);
     canvas.style.width=W+'px';canvas.style.height=H+'px';
     ctx.setTransform(dpr,0,0,dpr,0,0);
-    if(ow>0&&N>0){const sx=W/ow,sy=H/oh;for(let i=0;i<N;i++){x[i]*=sx;y[i]*=sy;}}
+    if(ow>0&&N>0){const sx=W/ow,sy=H/oh,sz=DEP/oDEP;for(let i=0;i<N;i++){x[i]*=sx;y[i]*=sy;z[i]*=sz;}}
     clearBG();
   }
 
@@ -268,15 +277,15 @@
       thn[i]=th[i]+diff;
     }
     // integrate at constant speed; clamp to screen (walls already turned them)
-    let vx=0,vy=0;const v=P.v, xmax=W-1, ymax=H-1;
+    let oax=0,oay=0;const v=P.v, xmax=W-1, ymax=H-1;
     for(let i=0;i<N;i++){
       const a=thn[i], c=Math.cos(a), s=Math.sin(a); th[i]=a;
       let nx=x[i]+c*v, ny=y[i]+s*v;
       x[i]= nx<1?1:(nx>xmax?xmax:nx);
       y[i]= ny<1?1:(ny>ymax?ymax:ny);
-      vx+=c; vy+=s;
+      oax+=c; oay+=s;
     }
-    vaCur=Math.hypot(vx,vy)/N;
+    vaCur=Math.hypot(oax,oay)/N;
   }
 
   // ---- render ----
@@ -315,6 +324,111 @@
     ctx.globalCompositeOperation='source-over';
   }
 
+  // ================= SPACE MODE (3D) =================
+  // Same topological k-NN + 3 rules, on S² unit headings in a 3D box, drawn
+  // with perspective projection and a slow auto-rotation for depth.
+  let head3=null,next3=null,cols3=0,rows3=0,deps3=0,cw3=0,ch3=0,cz3=0;
+  function buildGrid3(){
+    const cs=P.r; cols3=Math.max(1,Math.floor(W/cs)); rows3=Math.max(1,Math.floor(H/cs)); deps3=Math.max(1,Math.floor(DEP/cs));
+    cw3=W/cols3; ch3=H/rows3; cz3=DEP/deps3; const nc=cols3*rows3*deps3;
+    if(!head3||head3.length!==nc)head3=new Int32Array(nc); head3.fill(-1);
+    if(!next3||next3.length<N)next3=new Int32Array(Math.max(N,cap));
+    for(let i=0;i<N;i++){
+      let cx=(x[i]/cw3)|0; if(cx>=cols3)cx=cols3-1; if(cx<0)cx=0;
+      let cy=(y[i]/ch3)|0; if(cy>=rows3)cy=rows3-1; if(cy<0)cy=0;
+      let cz=(z[i]/cz3)|0; if(cz>=deps3)cz=deps3-1; if(cz<0)cz=0;
+      const c=(cz*rows3+cy)*cols3+cx; next3[i]=head3[c]; head3[c]=i;
+    }
+  }
+  function step3d(){
+    if(N===0)return;
+    buildGrid3();
+    const capR2=P.r*P.r, rSep2=P.rSep*P.rSep, noise=P.noise, wA=P.wA, wC=P.wC, wS=P.wS;
+    const turn=P.turn, wall=P.wall, mX=P.margin*Math.min(W,H), mZ=P.margin*DEP;
+    const kk=P.k<1?1:(P.k>MAXK?MAXK:P.k|0);
+    for(let i=0;i<N;i++){
+      const xi=x[i],yi=y[i],zi=z[i];
+      let kn=0,worst=0,worstd=-1;
+      const gx=(xi/cw3)|0, gy=(yi/ch3)|0, gz=(zi/cz3)|0;
+      for(let dz=-1;dz<=1;dz++){const cz=gz+dz;if(cz<0||cz>=deps3)continue;
+        for(let dy=-1;dy<=1;dy++){const cy=gy+dy;if(cy<0||cy>=rows3)continue;
+          for(let dxi=-1;dxi<=1;dxi++){const cx=gx+dxi;if(cx<0||cx>=cols3)continue;
+            for(let j=head3[(cz*rows3+cy)*cols3+cx];j!==-1;j=next3[j]){ if(j===i)continue;
+              const ddx=x[j]-xi,ddy=y[j]-yi,ddz=z[j]-zi,d2=ddx*ddx+ddy*ddy+ddz*ddz; if(d2>=capR2)continue;
+              if(kn<kk){kd[kn]=d2;ki[kn]=j;kn++; if(kn===kk){worstd=kd[0];worst=0;for(let t=1;t<kk;t++)if(kd[t]>worstd){worstd=kd[t];worst=t;}}}
+              else if(d2<worstd){kd[worst]=d2;ki[worst]=j; worstd=kd[0];worst=0;for(let t=1;t<kk;t++)if(kd[t]>worstd){worstd=kd[t];worst=t;}}
+            }}}}
+      let ax=vx[i],ay=vy[i],az=vz[i], coX=0,coY=0,coZ=0, seX=0,seY=0,seZ=0;
+      for(let t=0;t<kn;t++){ const j=ki[t],ddx=x[j]-xi,ddy=y[j]-yi,ddz=z[j]-zi,d2=kd[t];
+        ax+=vx[j];ay+=vy[j];az+=vz[j]; coX+=ddx;coY+=ddy;coZ+=ddz;
+        if(d2<rSep2&&d2>1e-6){const d=Math.sqrt(d2),w=1-d/P.rSep; seX-=ddx/d*w;seY-=ddy/d*w;seZ-=ddz/d*w;} }
+      let Dx=0,Dy=0,Dz=0,l;
+      if(kn>0){
+        l=Math.hypot(ax,ay,az); if(l>0){Dx+=wA*ax/l;Dy+=wA*ay/l;Dz+=wA*az/l;}
+        l=Math.hypot(coX,coY,coZ); if(l>0){Dx+=wC*coX/l;Dy+=wC*coY/l;Dz+=wC*coZ/l;}
+        l=Math.hypot(seX,seY,seZ); if(l>0){Dx+=wS*seX/l;Dy+=wS*seY/l;Dz+=wS*seZ/l;}
+      } else { Dx=vx[i];Dy=vy[i];Dz=vz[i]; }
+      if(xi<mX)Dx+=wall*(1-xi/mX); else if(xi>W-mX)Dx-=wall*(1-(W-xi)/mX);
+      if(yi<mX)Dy+=wall*(1-yi/mX); else if(yi>H-mX)Dy-=wall*(1-(H-yi)/mX);
+      if(zi<mZ)Dz+=wall*(1-zi/mZ); else if(zi>DEP-mZ)Dz-=wall*(1-(DEP-zi)/mZ);
+      Dx+=(Math.random()-0.5)*noise; Dy+=(Math.random()-0.5)*noise; Dz+=(Math.random()-0.5)*noise;
+      let dl=Math.hypot(Dx,Dy,Dz); if(dl<1e-9){Dx=vx[i];Dy=vy[i];Dz=vz[i];dl=1;} Dx/=dl;Dy/=dl;Dz/=dl;
+      // limited turn: rotate heading toward D by at most 'turn' (slerp clamp)
+      let hx=vx[i],hy=vy[i],hz=vz[i];
+      let dot=hx*Dx+hy*Dy+hz*Dz; if(dot>1)dot=1;else if(dot<-1)dot=-1;
+      const angb=Math.acos(dot); let nx,ny,nz;
+      if(angb<=turn||angb<1e-6){ nx=Dx;ny=Dy;nz=Dz; }
+      else { let tx=Dx-hx*dot,ty=Dy-hy*dot,tz=Dz-hz*dot,tl=Math.hypot(tx,ty,tz);
+        if(tl<1e-9){ nx=Dx;ny=Dy;nz=Dz; }
+        else { tx/=tl;ty/=tl;tz/=tl; const ca=Math.cos(turn),sa=Math.sin(turn); nx=hx*ca+tx*sa;ny=hy*ca+ty*sa;nz=hz*ca+tz*sa; } }
+      const nl=Math.hypot(nx,ny,nz)||1; vxn[i]=nx/nl;vyn[i]=ny/nl;vzn[i]=nz/nl;
+    }
+    let sx=0,sy=0,sz=0;const v=P.v;
+    for(let i=0;i<N;i++){
+      const hx=vxn[i],hy=vyn[i],hz=vzn[i]; vx[i]=hx;vy[i]=hy;vz[i]=hz;
+      let nx=x[i]+hx*v,ny=y[i]+hy*v,nz=z[i]+hz*v;
+      x[i]= nx<1?1:(nx>W-1?W-1:nx);
+      y[i]= ny<1?1:(ny>H-1?H-1:ny);
+      z[i]= nz<1?1:(nz>DEP-1?DEP-1:nz);
+      sx+=hx;sy+=hy;sz+=hz;
+    }
+    vaCur=Math.hypot(sx,sy,sz)/N;
+  }
+  let rot3d=0;
+  function render3d(){
+    if(P.trails){ ctx.globalCompositeOperation='source-over'; ctx.fillStyle='rgba(5,6,10,'+P.trail+')'; ctx.fillRect(0,0,W,H); }
+    else clearBG();
+    if(!P.paused)rot3d+=0.0032;
+    const cA=Math.cos(rot3d),sA=Math.sin(rot3d), cxw=W/2,cyw=H/2,czw=DEP/2, focal=DEP*1.5;
+    const px2=(X,Y,Z)=>{ const xr=cxw+(X-cxw)*cA-(Z-czw)*sA, zr=czw+(X-cxw)*sA+(Z-czw)*cA, sc=focal/(focal+zr);
+      return [cxw+(xr-cxw)*sc, cyw+(Y-cyw)*sc, sc]; };
+    if(P.links && N<=MAX_LINKS && N>1){
+      const capR2=P.r*P.r; ctx.globalCompositeOperation='source-over';
+      ctx.strokeStyle='rgba(120,150,255,0.13)'; ctx.lineWidth=1; ctx.beginPath();
+      for(let i=0;i<N;i++){const Pi=px2(x[i],y[i],z[i]);
+        for(let j=i+1;j<N;j++){const ddx=x[i]-x[j],ddy=y[i]-y[j],ddz=z[i]-z[j]; if(ddx*ddx+ddy*ddy+ddz*ddz<capR2){const Pj=px2(x[j],y[j],z[j]); ctx.moveTo(Pi[0],Pi[1]);ctx.lineTo(Pj[0],Pj[1]);}}}
+      ctx.stroke();
+    }
+    ctx.globalCompositeOperation='lighter';
+    const tailLen=Math.min(9,3+P.v*2.2), glow=P.glow && N<700;
+    for(let i=0;i<N;i++){
+      const pr=px2(x[i],y[i],z[i]), sc=pr[2], sxp=pr[0], syp=pr[1];
+      const hue=P.colorDir ? (((Math.atan2(vy[i],vx[i])%TAU)+TAU)%TAU/TAU*360) : 197;
+      const light=42+Math.max(0,Math.min(1,(sc-0.55)/0.85))*36; // closer = brighter
+      if(P.tails){
+        const pt=px2(x[i]-vx[i]*tailLen, y[i]-vy[i]*tailLen, z[i]-vz[i]*tailLen);
+        ctx.strokeStyle='hsla('+hue+',90%,'+light+'%,0.4)'; ctx.lineWidth=1.5*sc;
+        ctx.beginPath(); ctx.moveTo(pt[0],pt[1]); ctx.lineTo(sxp,syp); ctx.stroke();
+      }
+      if(glow){ ctx.fillStyle='hsla('+hue+',95%,'+light+'%,0.22)'; ctx.beginPath(); ctx.arc(sxp,syp,4.2*sc,0,TAU); ctx.fill(); }
+      ctx.fillStyle='hsla('+hue+',100%,'+(light+24)+'%,0.95)'; ctx.beginPath(); ctx.arc(sxp,syp,1.8*sc,0,TAU); ctx.fill();
+    }
+    ctx.globalCompositeOperation='source-over';
+  }
+  function enter3d(){ for(let i=0;i<N;i++){ const a=th[i]; let hz=(Math.random()-0.5)*0.6,hx=Math.cos(a),hy=Math.sin(a),l=Math.hypot(hx,hy,hz);
+    vx[i]=hx/l;vy[i]=hy/l;vz[i]=hz/l; if(z[i]<=0||z[i]>=DEP)z[i]=Math.random()*DEP; } }
+  function leave3d(){ for(let i=0;i<N;i++) th[i]=Math.atan2(vy[i],vx[i]); }
+
   // ---- HUD ----
   const nCount=document.getElementById('nCount'),vaFill=document.getElementById('vaFill'),
         vaNum=document.getElementById('vaNum'),stateLbl=document.getElementById('stateLbl');
@@ -349,8 +463,8 @@
 
   // ---- loop ----
   function frame(){
-    if(!P.paused)step();
-    render();
+    if(P.mode3d){ if(!P.paused)step3d(); render3d(); }
+    else { if(!P.paused)step(); render(); }
     if((uiTick++&3)===0)updateHUD();
     requestAnimationFrame(frame);
   }
@@ -403,6 +517,7 @@
       P[key]= inv ? !on : on;    // "再生" toggle drives paused (inverted)
       if(key==='trails'&&!on)clearBG();
       if(key==='hud')hudEl.classList.toggle('show',on);   // info panel hidden by default
+      if(key==='mode3d'){ on?enter3d():leave3d(); clearBG(); }   // planar ⇄ space
     });
   });
 
