@@ -149,6 +149,7 @@
 
   <div class="grp-h">表示 / ふるまい</div>
   <div class="card">
+    <div class="tgl" data-key="predator"><span>捕食者<small>大きな1匹が最寄りを追う／小魚は増速して逃げる</small></span><div class="switch"></div></div>
     <div class="tgl" data-key="mode3d"><span>空間モード（3D）<small>平面 ⇄ 立体（自動回転）</small></span><div class="switch"></div></div>
     <div class="tgl" data-key="hud"><span>情報パネル<small>左上のステータス（既定：非表示）</small></span><div class="switch"></div></div>
     <div class="tgl on" data-key="paused" data-inv="1"><span>再生<small>▶ 動かす / ⏸ 止める</small></span><div class="switch"></div></div>
@@ -194,6 +195,7 @@
     margin:0.18, wall:2.4,                             // soft walls
     trail:0.16,
     mode3d:false,   // false = planar (default), true = space (3D)
+    predator:false,
     paused:false, trails:true, glow:true, tails:true, colorDir:true, links:false,
     max:5000,
   };
@@ -240,15 +242,32 @@
     for(let i=0;i<N;i++){let cx=(x[i]/cw)|0;if(cx>=cols)cx=cols-1;if(cx<0)cx=0;let cy=(y[i]/ch)|0;if(cy>=rows)cy=rows-1;if(cy<0)cy=0;const c=cy*cols+cx;next[i]=head[c];head[c]=i;}
   }
 
+  // ---- predator (one big hunter; fish keep their distance and sprint away) ----
+  const W_PRED=6.0, FLEE_BOOST=1.7, PRED_SPEED=0.72; // avoidance weight / max extra speed / hunter speed vs fish
+  let pX=0,pY=0,pZ=0, pdx=1,pdy=0,pdz=0;
+  function fearR(){ return Math.min(W,H)*0.24; }               // "keep this distance" radius
+  function spawnPredator(){ pX=W*0.15; pY=H*0.15; pZ=DEP*0.5; pdx=1;pdy=0;pdz=0; }
+  function predatorStep(is3d){
+    if(N===0)return;
+    let bi=0,bd=1e18;                                          // nearest fish
+    for(let i=0;i<N;i++){const dx=x[i]-pX,dy=y[i]-pY,dz=is3d?z[i]-pZ:0,d=dx*dx+dy*dy+dz*dz; if(d<bd){bd=d;bi=i;}}
+    let dx=x[bi]-pX,dy=y[bi]-pY,dz=is3d?z[bi]-pZ:0; const l=Math.hypot(dx,dy,dz)||1, pv=P.v*PRED_SPEED;
+    pX+=dx/l*pv; pY+=dy/l*pv; if(is3d)pZ+=dz/l*pv;
+    pdx=dx/l; pdy=dy/l; pdz=is3d?dz/l:0;
+    pX=Math.min(W-1,Math.max(1,pX)); pY=Math.min(H-1,Math.max(1,pY)); if(is3d)pZ=Math.min(DEP-1,Math.max(1,pZ));
+  }
+
   // ---- physics: the ONE rule ----
   let vaCur=1;
   function step(){
     if(N===0)return;
+    if(P.predator)predatorStep(false);
     buildGrid();
     // Three LOCAL rules (Boids): ① align headings ② cohere toward local centre
     // ③ separate from too-close neighbours. Plus a little noise. Emergence, not scripting.
     const capR2=P.r*P.r, rSep2=P.rSep*P.rSep, noise=P.noise, wA=P.wA, wC=P.wC, wS=P.wS;
     const turn=P.turn, m=P.margin*Math.min(W,H), wall=P.wall;
+    const RF=fearR();
     const kk = P.k<1?1 : (P.k>MAXK?MAXK : P.k|0);   // topological: how many neighbours each bird tracks
     for(let i=0;i<N;i++){
       const xi=x[i],yi=y[i];
@@ -278,17 +297,23 @@
       // soft walls: steer inward inside the margin (bank away, no 90° bounce)
       if(xi<m)Dx+=wall*(1-xi/m); else if(xi>W-m)Dx-=wall*(1-(W-xi)/m);
       if(yi<m)Dy+=wall*(1-yi/m); else if(yi>H-m)Dy-=wall*(1-(H-yi)/m);
+      // predator: flee hard when it's inside the fear radius (turn fast + steer away)
+      let tcap=turn;
+      if(P.predator){ const dxp=xi-pX, dyp=yi-pY, dp=Math.hypot(dxp,dyp)||1;
+        if(dp<RF){ const s=1-dp/RF; Dx+=dxp/dp*(W_PRED*s+1); Dy+=dyp/dp*(W_PRED*s+1); tcap=turn*(1+3.5*s); } }
       if(Dx===0&&Dy===0){Dx=Math.cos(th[i]);Dy=Math.sin(th[i]);}
       let da=Math.atan2(Dy,Dx)+(Math.random()-0.5)*noise;
       let diff=da-th[i]; while(diff>Math.PI)diff-=TAU; while(diff<-Math.PI)diff+=TAU;
-      if(diff>turn)diff=turn; else if(diff<-turn)diff=-turn; // limited turn rate → smooth banking
+      if(diff>tcap)diff=tcap; else if(diff<-tcap)diff=-tcap; // limited turn (looser when fleeing)
       thn[i]=th[i]+diff;
     }
-    // integrate at constant speed; clamp to screen (walls already turned them)
+    // integrate; fish sprint when the predator is close
     let oax=0,oay=0;const v=P.v, xmax=W-1, ymax=H-1;
     for(let i=0;i<N;i++){
       const a=thn[i], c=Math.cos(a), s=Math.sin(a); th[i]=a;
-      let nx=x[i]+c*v, ny=y[i]+s*v;
+      let vv=v;
+      if(P.predator){ const dp=Math.hypot(x[i]-pX,y[i]-pY); if(dp<RF)vv=v*(1+FLEE_BOOST*(1-dp/RF)); }
+      let nx=x[i]+c*vv, ny=y[i]+s*vv;
       x[i]= nx<1?1:(nx>xmax?xmax:nx);
       y[i]= ny<1?1:(ny>ymax?ymax:ny);
       oax+=c; oay+=s;
@@ -329,7 +354,21 @@
       if(glow){ ctx.fillStyle='hsla('+hue+',95%,60%,0.28)'; ctx.beginPath(); ctx.arc(px,py,4.2,0,TAU); ctx.fill(); }
       ctx.fillStyle='hsla('+hue+',100%,72%,0.95)'; ctx.beginPath(); ctx.arc(px,py,1.7,0,TAU); ctx.fill();
     }
+    if(P.predator)drawPredator(pX,pY,1);
     ctx.globalCompositeOperation='source-over';
+  }
+
+  // Big red hunter (sc = perspective scale, 1 in 2D). fear ring shows keep-distance radius.
+  function drawPredator(sx,sy,sc){
+    const R=fearR();
+    ctx.globalCompositeOperation='source-over';
+    ctx.strokeStyle='rgba(255,70,70,0.10)'; ctx.lineWidth=1; ctx.beginPath(); ctx.arc(sx,sy,R*sc,0,TAU); ctx.stroke();
+    ctx.globalCompositeOperation='lighter';
+    ctx.fillStyle='rgba(255,60,60,0.20)'; ctx.beginPath(); ctx.arc(sx,sy,26*sc,0,TAU); ctx.fill();
+    ctx.globalCompositeOperation='source-over';
+    ctx.fillStyle='#2a0710'; ctx.beginPath(); ctx.arc(sx,sy,11*sc,0,TAU); ctx.fill();
+    ctx.fillStyle='hsla(2,85%,52%,0.96)'; ctx.beginPath(); ctx.arc(sx,sy,8.4*sc,0,TAU); ctx.fill();
+    ctx.fillStyle='rgba(255,220,210,0.9)'; ctx.beginPath(); ctx.arc(sx-3*sc,sy-3*sc,2.4*sc,0,TAU); ctx.fill();
   }
 
   // ================= SPACE MODE (3D) =================
@@ -350,10 +389,12 @@
   }
   function step3d(){
     if(N===0)return;
+    if(P.predator)predatorStep(true);
     buildGrid3();
     const capR2=P.r*P.r, rSep2=P.rSep*P.rSep, noise=P.noise, wA=P.wA, wC=P.wC, wS=P.wS;
     const turn=P.turn, wall=P.wall, mX=P.margin*Math.min(W,H), mZ=P.margin*DEP;
     const kk=P.k<1?1:(P.k>MAXK?MAXK:P.k|0);
+    const RF=fearR();
     for(let i=0;i<N;i++){
       const xi=x[i],yi=y[i],zi=z[i];
       let kn=0,worst=0,worstd=-1;
@@ -379,22 +420,28 @@
       if(xi<mX)Dx+=wall*(1-xi/mX); else if(xi>W-mX)Dx-=wall*(1-(W-xi)/mX);
       if(yi<mX)Dy+=wall*(1-yi/mX); else if(yi>H-mX)Dy-=wall*(1-(H-yi)/mX);
       if(zi<mZ)Dz+=wall*(1-zi/mZ); else if(zi>DEP-mZ)Dz-=wall*(1-(DEP-zi)/mZ);
+      // predator: sprint away in 3D, turn faster when it's close
+      let tcap=turn;
+      if(P.predator){ const dxp=xi-pX,dyp=yi-pY,dzp=zi-pZ,dp=Math.hypot(dxp,dyp,dzp)||1;
+        if(dp<RF){ const s=1-dp/RF, g=W_PRED*s+1; Dx+=dxp/dp*g; Dy+=dyp/dp*g; Dz+=dzp/dp*g; tcap=turn*(1+3.5*s); } }
       Dx+=(Math.random()-0.5)*noise; Dy+=(Math.random()-0.5)*noise; Dz+=(Math.random()-0.5)*noise;
       let dl=Math.hypot(Dx,Dy,Dz); if(dl<1e-9){Dx=vx[i];Dy=vy[i];Dz=vz[i];dl=1;} Dx/=dl;Dy/=dl;Dz/=dl;
-      // limited turn: rotate heading toward D by at most 'turn' (slerp clamp)
+      // limited turn: rotate heading toward D by at most 'tcap' (slerp clamp)
       let hx=vx[i],hy=vy[i],hz=vz[i];
       let dot=hx*Dx+hy*Dy+hz*Dz; if(dot>1)dot=1;else if(dot<-1)dot=-1;
       const angb=Math.acos(dot); let nx,ny,nz;
-      if(angb<=turn||angb<1e-6){ nx=Dx;ny=Dy;nz=Dz; }
+      if(angb<=tcap||angb<1e-6){ nx=Dx;ny=Dy;nz=Dz; }
       else { let tx=Dx-hx*dot,ty=Dy-hy*dot,tz=Dz-hz*dot,tl=Math.hypot(tx,ty,tz);
         if(tl<1e-9){ nx=Dx;ny=Dy;nz=Dz; }
-        else { tx/=tl;ty/=tl;tz/=tl; const ca=Math.cos(turn),sa=Math.sin(turn); nx=hx*ca+tx*sa;ny=hy*ca+ty*sa;nz=hz*ca+tz*sa; } }
+        else { tx/=tl;ty/=tl;tz/=tl; const ca=Math.cos(tcap),sa=Math.sin(tcap); nx=hx*ca+tx*sa;ny=hy*ca+ty*sa;nz=hz*ca+tz*sa; } }
       const nl=Math.hypot(nx,ny,nz)||1; vxn[i]=nx/nl;vyn[i]=ny/nl;vzn[i]=nz/nl;
     }
-    let sx=0,sy=0,sz=0;const v=P.v;
+    let sx=0,sy=0,sz=0;const v=P.v, RF2=RF;
     for(let i=0;i<N;i++){
       const hx=vxn[i],hy=vyn[i],hz=vzn[i]; vx[i]=hx;vy[i]=hy;vz[i]=hz;
-      let nx=x[i]+hx*v,ny=y[i]+hy*v,nz=z[i]+hz*v;
+      let vv=v;
+      if(P.predator){ const dp=Math.hypot(x[i]-pX,y[i]-pY,z[i]-pZ); if(dp<RF2)vv=v*(1+FLEE_BOOST*(1-dp/RF2)); }
+      let nx=x[i]+hx*vv,ny=y[i]+hy*vv,nz=z[i]+hz*vv;
       x[i]= nx<1?1:(nx>W-1?W-1:nx);
       y[i]= ny<1?1:(ny>H-1?H-1:ny);
       z[i]= nz<1?1:(nz>DEP-1?DEP-1:nz);
@@ -450,6 +497,8 @@
       ctx.fillStyle='hsla('+hue+','+S+'%,'+L+'%,'+Aa+')';
       ctx.beginPath(); ctx.arc(sX[i],sY[i], Math.max(0.5,2.1*sc*(1-0.5*t)), 0, TAU); ctx.fill();
     }
+    if(P.predator){ const xr=cxw+(pX-cxw)*cA-(pZ-czw)*sA, zr=czw+(pX-cxw)*sA+(pZ-czw)*cA, sc=focal/(focal+zr);
+      drawPredator(cxw+(xr-cxw)*sc, cyw+(pY-cyw)*sc, sc); }
   }
   function enter3d(){ for(let i=0;i<N;i++){ const a=th[i]; let hz=(Math.random()-0.5)*0.6,hx=Math.cos(a),hy=Math.sin(a),l=Math.hypot(hx,hy,hz);
     vx[i]=hx/l;vy[i]=hy/l;vz[i]=hz/l; if(z[i]<=0||z[i]>=DEP)z[i]=Math.random()*DEP; } }
@@ -548,6 +597,7 @@
       if(key==='trails'&&!on)clearBG();
       if(key==='hud')hudEl.classList.toggle('show',on);   // info panel hidden by default
       if(key==='mode3d'){ on?enter3d():leave3d(); clearBG(); rotbar.classList.toggle('show',on); }   // planar ⇄ space
+      if(key==='predator'&&on)spawnPredator();
     });
   });
 
