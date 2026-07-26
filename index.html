@@ -20,7 +20,8 @@
   #stage{position:fixed;inset:0;display:block}
 
   /* ---- HUD ---- */
-  .hud{position:fixed;left:16px;top:14px;z-index:10;display:flex;flex-direction:column;gap:10px;pointer-events:none;max-width:min(320px,84vw)}
+  .hud{position:fixed;left:16px;top:14px;z-index:10;display:none;flex-direction:column;gap:10px;pointer-events:none;max-width:min(320px,84vw)}
+  .hud.show{display:flex}
   .card{
     background:var(--panel);border:1px solid var(--panel-line);border-radius:14px;padding:12px 14px;
     backdrop-filter:blur(12px) saturate(1.2);-webkit-backdrop-filter:blur(12px) saturate(1.2);
@@ -141,6 +142,7 @@
 
   <div class="grp-h">表示 / ふるまい</div>
   <div class="card">
+    <div class="tgl" data-key="hud"><span>情報パネル<small>左上のステータス（既定：非表示）</small></span><div class="switch"></div></div>
     <div class="tgl on" data-key="paused" data-inv="1"><span>再生<small>▶ 動かす / ⏸ 止める</small></span><div class="switch"></div></div>
     <div class="tgl on" data-key="trails"><span>残像トレイル<small>ひゅんひゅんの尾</small></span><div class="switch"></div></div>
     <div class="tgl on" data-key="glow"><span>グロー<small>にじむ発光</small></span><div class="switch"></div></div>
@@ -382,12 +384,14 @@
   bindSlider('trl','trlVal','trail',v=>v.toFixed(2));
 
   // ---- controls: toggles ----
+  const hudEl=document.querySelector('.hud');
   document.querySelectorAll('.tgl').forEach(el=>{
     const key=el.dataset.key, inv=el.dataset.inv==='1';
     el.addEventListener('click',()=>{
       const on=el.classList.toggle('on');
       P[key]= inv ? !on : on;    // "再生" toggle drives paused (inverted)
       if(key==='trails'&&!on)clearBG();
+      if(key==='hud')hudEl.classList.toggle('show',on);   // info panel hidden by default
     });
   });
 
