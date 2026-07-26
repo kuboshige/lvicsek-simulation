@@ -114,20 +114,28 @@
       <canvas id="spark" width="120" height="26"></canvas>
     </div>
     <div class="rulenote">
-      ルールは<b>1つだけ</b>・ずっと同じ：<br>
-      「近傍の平均向き ＋ ノイズ」。<br>
-      変えているのは <em>粒子の数だけ</em>。数が臨界を超えると、群れが<em>ひとりでに</em>生まれる。
+      各点が見るのは<b>近くの仲間だけ</b>。命令はたった3つ：<br>
+      <em>①そろえる</em>・<em>②寄る</em>・<em>③離れる</em>。<br>
+      これだけで、群れが<em>ひとりでに</em>渦を巻き、分かれ、また集まる。
     </div>
   </div>
 </div>
 
 <div class="gear" id="gear" title="設定">⚙</div>
 <div class="controls" id="controls">
-  <div class="grp-h">パラメータ</div>
+  <div class="grp-h">3つのルール（近くの仲間だけ見る）</div>
   <div class="card ctl-wrap">
-    <div class="ctl"><label>ノイズ η <b id="etaVal">0.45</b></label><input type="range" id="eta" min="0" max="1.5" step="0.01" value="0.45"></div>
-    <div class="ctl"><label>速さ v <b id="spdVal">1.5</b></label><input type="range" id="spd" min="0.3" max="3.5" step="0.1" value="1.5"></div>
-    <div class="ctl"><label>視野半径 r <b id="radVal">52</b></label><input type="range" id="rad" min="20" max="140" step="1" value="52"></div>
+    <div class="ctl"><label>① 整列 <small style="color:var(--muted)">向きをそろえる</small> <b id="waVal">1.0</b></label><input type="range" id="wa" min="0" max="2.5" step="0.05" value="1.0"></div>
+    <div class="ctl"><label>② 結合 <small style="color:var(--muted)">寄り集まる</small> <b id="wcVal">0.85</b></label><input type="range" id="wc" min="0" max="2.5" step="0.05" value="0.85"></div>
+    <div class="ctl"><label>③ 分離 <small style="color:var(--muted)">近すぎたら離れる</small> <b id="wsVal">1.4</b></label><input type="range" id="ws" min="0" max="3" step="0.05" value="1.4"></div>
+    <div class="ctl"><label>ノイズ <small style="color:var(--muted)">ゆらぎ</small> <b id="nzVal">0.18</b></label><input type="range" id="nz" min="0" max="1.2" step="0.01" value="0.18"></div>
+  </div>
+
+  <div class="grp-h">動き</div>
+  <div class="card ctl-wrap">
+    <div class="ctl"><label>速さ v <b id="spdVal">1.7</b></label><input type="range" id="spd" min="0.3" max="4" step="0.1" value="1.7"></div>
+    <div class="ctl"><label>視野半径 r <b id="radVal">60</b></label><input type="range" id="rad" min="24" max="150" step="1" value="60"></div>
+    <div class="ctl"><label>曲がりやすさ <b id="tnVal">0.28</b></label><input type="range" id="tn" min="0.05" max="0.9" step="0.01" value="0.28"></div>
     <div class="ctl"><label>残像の強さ <b id="trlVal">0.16</b></label><input type="range" id="trl" min="0.02" max="0.9" step="0.01" value="0.16"></div>
   </div>
 
@@ -164,9 +172,12 @@
   const canvas = document.getElementById('stage');
   const ctx = canvas.getContext('2d', { alpha:false });
 
-  // ---- tunable state (rule params are FIXED unless the user drags a slider) ----
+  // ---- tunable state ----
   const P = {
-    eta:0.45, v:1.5, r:52, trail:0.16,
+    r:60, rSep:18, v:1.7, turn:0.28, noise:0.18, // perception & motion
+    wA:1.0, wC:0.85, wS:1.4,                      // 3 boids weights: align / cohere / separate
+    margin:0.14, wall:1.6,                        // soft walls
+    trail:0.16,
     paused:false, trails:true, glow:true, tails:true, colorDir:true, links:false,
     max:5000,
   };
@@ -210,28 +221,50 @@
   function step(){
     if(N===0)return;
     buildGrid();
-    const r2=P.r*P.r,eta=P.eta;
+    // Three LOCAL rules (Boids): ① align headings ② cohere toward local centre
+    // ③ separate from too-close neighbours. Plus a little noise. Emergence, not scripting.
+    const r2=P.r*P.r, rSep2=P.rSep*P.rSep, noise=P.noise, wA=P.wA, wC=P.wC, wS=P.wS;
+    const turn=P.turn, m=P.margin*Math.min(W,H), wall=P.wall;
     for(let i=0;i<N;i++){
-      const xi=x[i],yi=y[i]; let ss=Math.sin(th[i]),sc=Math.cos(th[i]);
-      let cx=(xi/cw)|0,cy=(yi/ch)|0;
-      for(let dy=-1;dy<=1;dy++){const ny=cy+dy;if(ny<0||ny>=rows)continue;
-        for(let dx=-1;dx<=1;dx++){const nx=cx+dx;if(nx<0||nx>=cols)continue;
+      const xi=x[i],yi=y[i];
+      let ax=Math.cos(th[i]),ay=Math.sin(th[i]); // alignment (include self)
+      let coX=0,coY=0, seX=0,seY=0, cnt=0;
+      const gx0=(xi/cw)|0, gy0=(yi/ch)|0;
+      for(let dy=-1;dy<=1;dy++){const ny=gy0+dy;if(ny<0||ny>=rows)continue;
+        for(let dx=-1;dx<=1;dx++){const nx=gx0+dx;if(nx<0||nx>=cols)continue;
           for(let j=head[ny*cols+nx];j!==-1;j=next[j]){ if(j===i)continue;
-            const ddx=xi-x[j],ddy=yi-y[j];
-            if(ddx*ddx+ddy*ddy<r2){ss+=Math.sin(th[j]);sc+=Math.cos(th[j]);}
+            const ddx=x[j]-xi, ddy=y[j]-yi, d2=ddx*ddx+ddy*ddy;
+            if(d2<r2){
+              ax+=Math.cos(th[j]); ay+=Math.sin(th[j]);
+              coX+=ddx; coY+=ddy; cnt++;
+              if(d2<rSep2 && d2>1e-6){ const d=Math.sqrt(d2), w=1-d/P.rSep; seX-=ddx/d*w; seY-=ddy/d*w; }
+            }
           }}}
-      thn[i]=Math.atan2(ss,sc)+(Math.random()-0.5)*eta;
+      let Dx=0,Dy=0,l;
+      if(cnt>0){
+        l=Math.hypot(ax,ay); if(l>0){Dx+=wA*ax/l; Dy+=wA*ay/l;}
+        l=Math.hypot(coX,coY); if(l>0){Dx+=wC*coX/l; Dy+=wC*coY/l;}
+        l=Math.hypot(seX,seY); if(l>0){Dx+=wS*seX/l; Dy+=wS*seY/l;}
+      } else { Dx=Math.cos(th[i]); Dy=Math.sin(th[i]); }
+      // soft walls: steer inward inside the margin (bank away, no 90° bounce)
+      if(xi<m)Dx+=wall*(1-xi/m); else if(xi>W-m)Dx-=wall*(1-(W-xi)/m);
+      if(yi<m)Dy+=wall*(1-yi/m); else if(yi>H-m)Dy-=wall*(1-(H-yi)/m);
+      if(Dx===0&&Dy===0){Dx=Math.cos(th[i]);Dy=Math.sin(th[i]);}
+      let da=Math.atan2(Dy,Dx)+(Math.random()-0.5)*noise;
+      let diff=da-th[i]; while(diff>Math.PI)diff-=TAU; while(diff<-Math.PI)diff+=TAU;
+      if(diff>turn)diff=turn; else if(diff<-turn)diff=-turn; // limited turn rate → smooth banking
+      thn[i]=th[i]+diff;
     }
-    // integrate with REFLECTING walls (screen edges bounce; nothing leaves the view)
-    let gx=0,gy=0;const v=P.v, xmax=W-1, ymax=H-1;
+    // integrate at constant speed; clamp to screen (walls already turned them)
+    let vx=0,vy=0;const v=P.v, xmax=W-1, ymax=H-1;
     for(let i=0;i<N;i++){
-      const a=thn[i]; let c=Math.cos(a),s=Math.sin(a);
+      const a=thn[i], c=Math.cos(a), s=Math.sin(a); th[i]=a;
       let nx=x[i]+c*v, ny=y[i]+s*v;
-      if(nx<1){nx=2-nx;c=-c;} else if(nx>xmax){nx=2*xmax-nx;c=-c;}
-      if(ny<1){ny=2-ny;s=-s;} else if(ny>ymax){ny=2*ymax-ny;s=-s;}
-      th[i]=Math.atan2(s,c); x[i]=nx; y[i]=ny; gx+=c; gy+=s;
+      x[i]= nx<1?1:(nx>xmax?xmax:nx);
+      y[i]= ny<1?1:(ny>ymax?ymax:ny);
+      vx+=c; vy+=s;
     }
-    vaCur=Math.hypot(gx,gy)/N;
+    vaCur=Math.hypot(vx,vy)/N;
   }
 
   // ---- render ----
@@ -339,9 +372,13 @@
   gear.addEventListener('click',()=>{gear.classList.toggle('open');controls.classList.toggle('open');});
   function bindSlider(id,valId,key,fmt){const el=document.getElementById(id),out=document.getElementById(valId);
     el.addEventListener('input',()=>{P[key]=parseFloat(el.value);out.textContent=fmt(P[key]);});}
-  bindSlider('eta','etaVal','eta',v=>v.toFixed(2));
+  bindSlider('wa','waVal','wA',v=>v.toFixed(2));
+  bindSlider('wc','wcVal','wC',v=>v.toFixed(2));
+  bindSlider('ws','wsVal','wS',v=>v.toFixed(2));
+  bindSlider('nz','nzVal','noise',v=>v.toFixed(2));
   bindSlider('spd','spdVal','v',v=>v.toFixed(1));
   bindSlider('rad','radVal','r',v=>v.toFixed(0));
+  bindSlider('tn','tnVal','turn',v=>v.toFixed(2));
   bindSlider('trl','trlVal','trail',v=>v.toFixed(2));
 
   // ---- controls: toggles ----
