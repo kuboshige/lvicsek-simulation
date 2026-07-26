@@ -97,6 +97,12 @@
   .toast.show{animation:pop 2.6s cubic-bezier(.16,1,.3,1) forwards}
   @keyframes pop{0%{opacity:0;transform:translate(-50%,-50%) scale(.7)}12%{opacity:1;transform:translate(-50%,-50%) scale(1.05)}22%{transform:translate(-50%,-50%) scale(1)}80%{opacity:1}100%{opacity:0;transform:translate(-50%,-52%) scale(1)}}
 
+  .rotbar{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);z-index:10;display:none;align-items:center;gap:11px;
+    background:var(--panel);border:1px solid var(--panel-line);border-radius:13px;padding:9px 16px;
+    backdrop-filter:blur(12px) saturate(1.2);-webkit-backdrop-filter:blur(12px) saturate(1.2);box-shadow:0 10px 40px rgba(0,0,0,.35)}
+  .rotbar.show{display:flex}
+  .rotbar span{font-size:11px;color:var(--muted);letter-spacing:.08em;white-space:nowrap}
+  .rotbar input[type=range]{width:min(56vw,380px)}
   .credit{position:fixed;right:14px;bottom:12px;z-index:9;font-size:11px;color:rgba(154,163,199,.5);pointer-events:none}
   @media (max-width:560px){.n-big{font-size:26px}.controls{width:min(246px,80vw)}.hint{font-size:13px;bottom:26px;padding:0 16px}}
 </style>
@@ -167,6 +173,8 @@
 </div>
 
 <div class="hint" id="hint">画面を<b>タップ</b>／<b>ドラッグ</b>すると粒子が増える<br><span style="font-size:12px">tap &amp; drag to breed particles</span></div>
+
+<div class="rotbar" id="rotbar"><span>視点回転 ⟳</span><input type="range" id="viewrot" min="-180" max="180" step="1" value="0"><span id="viewrotVal" style="width:38px;text-align:right;color:var(--ink)">0°</span></div>
 
 <div class="credit">Vicsek model · self-propelled particles</div>
 
@@ -394,36 +402,54 @@
     }
     vaCur=Math.hypot(sx,sy,sz)/N;
   }
-  let rot3d=0;
+  let rot3d=0, viewYaw=0;
+  let sX=null,sY=null,sSc=null,sZ=null,tX=null,tY=null,ord=null;
   function render3d(){
     if(P.trails){ ctx.globalCompositeOperation='source-over'; ctx.fillStyle='rgba(5,6,10,'+P.trail+')'; ctx.fillRect(0,0,W,H); }
     else clearBG();
-    if(!P.paused)rot3d+=0.0032;
-    const cA=Math.cos(rot3d),sA=Math.sin(rot3d), cxw=W/2,cyw=H/2,czw=DEP/2, focal=DEP*1.5;
-    const px2=(X,Y,Z)=>{ const xr=cxw+(X-cxw)*cA-(Z-czw)*sA, zr=czw+(X-cxw)*sA+(Z-czw)*cA, sc=focal/(focal+zr);
-      return [cxw+(xr-cxw)*sc, cyw+(Y-cyw)*sc, sc]; };
+    if(N===0){ ctx.globalCompositeOperation='source-over'; return; }
+    if(!P.paused)rot3d+=0.0026;
+    const A=rot3d+viewYaw, cA=Math.cos(A),sA=Math.sin(A), cxw=W/2,cyw=H/2,czw=DEP/2, focal=DEP*1.55;
+    if(!sX||sX.length<cap){ sX=new Float32Array(cap);sY=new Float32Array(cap);sSc=new Float32Array(cap);sZ=new Float32Array(cap);tX=new Float32Array(cap);tY=new Float32Array(cap);ord=new Int32Array(cap); }
+    const tailLen=Math.min(9,3+P.v*2.2);
+    let zmin=1e9,zmax=-1e9;
+    for(let i=0;i<N;i++){
+      const xr=cxw+(x[i]-cxw)*cA-(z[i]-czw)*sA, zr=czw+(x[i]-cxw)*sA+(z[i]-czw)*cA, sc=focal/(focal+zr);
+      sX[i]=cxw+(xr-cxw)*sc; sY[i]=cyw+(y[i]-cyw)*sc; sSc[i]=sc; sZ[i]=zr; ord[i]=i;
+      if(zr<zmin)zmin=zr; if(zr>zmax)zmax=zr;
+      const txx=x[i]-vx[i]*tailLen, tyy=y[i]-vy[i]*tailLen, tzz=z[i]-vz[i]*tailLen;
+      const txr=cxw+(txx-cxw)*cA-(tzz-czw)*sA, tzr=czw+(txx-cxw)*sA+(tzz-czw)*cA, tsc=focal/(focal+tzr);
+      tX[i]=cxw+(txr-cxw)*tsc; tY[i]=cyw+(tyy-cyw)*tsc;
+    }
+    const invz=1/Math.max(1e-6,zmax-zmin);
+    const sub=ord.subarray(0,N); sub.sort((a,b)=>sZ[b]-sZ[a]);   // far -> near
+    // links behind everything
     if(P.links && N<=MAX_LINKS && N>1){
       const capR2=P.r*P.r; ctx.globalCompositeOperation='source-over';
-      ctx.strokeStyle='rgba(120,150,255,0.13)'; ctx.lineWidth=1; ctx.beginPath();
-      for(let i=0;i<N;i++){const Pi=px2(x[i],y[i],z[i]);
-        for(let j=i+1;j<N;j++){const ddx=x[i]-x[j],ddy=y[i]-y[j],ddz=z[i]-z[j]; if(ddx*ddx+ddy*ddy+ddz*ddz<capR2){const Pj=px2(x[j],y[j],z[j]); ctx.moveTo(Pi[0],Pi[1]);ctx.lineTo(Pj[0],Pj[1]);}}}
+      ctx.strokeStyle='rgba(120,150,255,0.12)'; ctx.lineWidth=1; ctx.beginPath();
+      for(let i=0;i<N;i++)for(let j=i+1;j<N;j++){const ddx=x[i]-x[j],ddy=y[i]-y[j],ddz=z[i]-z[j]; if(ddx*ddx+ddy*ddy+ddz*ddz<capR2){ctx.moveTo(sX[i],sY[i]);ctx.lineTo(sX[j],sY[j]);}}
       ctx.stroke();
     }
-    ctx.globalCompositeOperation='lighter';
-    const tailLen=Math.min(9,3+P.v*2.2), glow=P.glow && N<700;
-    for(let i=0;i<N;i++){
-      const pr=px2(x[i],y[i],z[i]), sc=pr[2], sxp=pr[0], syp=pr[1];
-      const hue=P.colorDir ? (((Math.atan2(vy[i],vx[i])%TAU)+TAU)%TAU/TAU*360) : 197;
-      const light=42+Math.max(0,Math.min(1,(sc-0.55)/0.85))*36; // closer = brighter
-      if(P.tails){
-        const pt=px2(x[i]-vx[i]*tailLen, y[i]-vy[i]*tailLen, z[i]-vz[i]*tailLen);
-        ctx.strokeStyle='hsla('+hue+',90%,'+light+'%,0.4)'; ctx.lineWidth=1.5*sc;
-        ctx.beginPath(); ctx.moveTo(pt[0],pt[1]); ctx.lineTo(sxp,syp); ctx.stroke();
+    // pass 1: additive glow, strongly fog-attenuated with depth
+    if(P.glow && N<900){
+      ctx.globalCompositeOperation='lighter';
+      for(let n=0;n<N;n++){ const i=sub[n], t=(sZ[i]-zmin)*invz, sc=sSc[i], a=0.16*(1-0.75*t);
+        if(a<=0.012)continue;
+        const hue=P.colorDir?(((Math.atan2(vy[i],vx[i])%TAU)+TAU)%TAU/TAU*360):197;
+        ctx.fillStyle='hsla('+hue+',80%,'+(48-30*t)+'%,'+a+')';
+        ctx.beginPath(); ctx.arc(sX[i],sY[i], 3.4*sc*(1-0.4*t)+0.5, 0, TAU); ctx.fill();
       }
-      if(glow){ ctx.fillStyle='hsla('+hue+',95%,'+light+'%,0.22)'; ctx.beginPath(); ctx.arc(sxp,syp,4.2*sc,0,TAU); ctx.fill(); }
-      ctx.fillStyle='hsla('+hue+',100%,'+(light+24)+'%,0.95)'; ctx.beginPath(); ctx.arc(sxp,syp,1.8*sc,0,TAU); ctx.fill();
     }
+    // pass 2: cores + tails, OCCLUDING (near drawn over far) with atmospheric fog
     ctx.globalCompositeOperation='source-over';
+    for(let n=0;n<N;n++){ const i=sub[n], t=(sZ[i]-zmin)*invz, sc=sSc[i];
+      const hue=P.colorDir?(((Math.atan2(vy[i],vx[i])%TAU)+TAU)%TAU/TAU*360):197;
+      const S=92-64*t, L=72-48*t, Aa=0.96-0.66*t;               // far = small, dark, desaturated, faint
+      if(P.tails){ ctx.strokeStyle='hsla('+hue+','+S+'%,'+L+'%,'+(Aa*0.5)+')'; ctx.lineWidth=Math.max(0.4,1.5*sc*(1-0.4*t));
+        ctx.beginPath(); ctx.moveTo(tX[i],tY[i]); ctx.lineTo(sX[i],sY[i]); ctx.stroke(); }
+      ctx.fillStyle='hsla('+hue+','+S+'%,'+L+'%,'+Aa+')';
+      ctx.beginPath(); ctx.arc(sX[i],sY[i], Math.max(0.5,2.1*sc*(1-0.5*t)), 0, TAU); ctx.fill();
+    }
   }
   function enter3d(){ for(let i=0;i<N;i++){ const a=th[i]; let hz=(Math.random()-0.5)*0.6,hx=Math.cos(a),hy=Math.sin(a),l=Math.hypot(hx,hy,hz);
     vx[i]=hx/l;vy[i]=hy/l;vz[i]=hz/l; if(z[i]<=0||z[i]>=DEP)z[i]=Math.random()*DEP; } }
@@ -508,6 +534,10 @@
   bindSlider('spd','spdVal','v',v=>v.toFixed(1));
   bindSlider('trl','trlVal','trail',v=>v.toFixed(2));
 
+  // ---- view rotation bar (3D only) ----
+  const rotbar=document.getElementById('rotbar'), viewrot=document.getElementById('viewrot'), viewrotVal=document.getElementById('viewrotVal');
+  viewrot.addEventListener('input',()=>{ viewYaw=viewrot.value*Math.PI/180; viewrotVal.textContent=viewrot.value+'°'; });
+
   // ---- controls: toggles ----
   const hudEl=document.querySelector('.hud');
   document.querySelectorAll('.tgl').forEach(el=>{
@@ -517,7 +547,7 @@
       P[key]= inv ? !on : on;    // "再生" toggle drives paused (inverted)
       if(key==='trails'&&!on)clearBG();
       if(key==='hud')hudEl.classList.toggle('show',on);   // info panel hidden by default
-      if(key==='mode3d'){ on?enter3d():leave3d(); clearBG(); }   // planar ⇄ space
+      if(key==='mode3d'){ on?enter3d():leave3d(); clearBG(); rotbar.classList.toggle('show',on); }   // planar ⇄ space
     });
   });
 
